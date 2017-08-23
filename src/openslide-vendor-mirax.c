@@ -34,6 +34,7 @@
 #include "openslide-decode-gdkpixbuf.h"
 #include "openslide-decode-jpeg.h"
 #include "openslide-decode-png.h"
+#include "openslide-decode-jp2k.h"
 
 #include <glib.h>
 #include <stdlib.h>
@@ -146,6 +147,7 @@ enum image_format {
   FORMAT_JPEG,
   FORMAT_PNG,
   FORMAT_BMP,
+  FORMAT_JPEG2000,
 };
 
 struct slide_zoom_level_section {
@@ -217,6 +219,23 @@ static void tile_free(gpointer data) {
   g_slice_free(struct tile, tile);
 }
 
+static bool read_fully(const char *filename, int32_t offset, void * data, int32_t size, GError **err) {
+    FILE *f = _openslide_fopen(filename, "rb", err);
+    if (f == NULL) {
+        return false;
+    }
+    if (offset && fseeko(f, offset, SEEK_SET) == -1) {
+        _openslide_io_error(err, "Cannot seek to offset");
+    fclose(f);
+    return false;
+  }
+
+  int32_t read = fread(data, 1, size, f);
+
+  fclose(f);
+  return read == size;
+}
+
 static uint32_t *read_image(openslide_t *osr,
                             struct image *image,
                             enum image_format format,
@@ -247,6 +266,18 @@ static uint32_t *read_image(openslide_t *osr,
                                        dest, w, h,
                                        err);
     break;
+  case FORMAT_JPEG2000: {
+    int32_t buflen = image->length;
+    void * buf = g_malloc(buflen);
+
+    result = read_fully(data->datafile_paths[image->fileno], image->start_in_file, buf, buflen, err);
+    if (result) {
+        result = _openslide_jp2k_decode_buffer(dest, w, h, buf, buflen, OPENSLIDE_JP2K_RGB, err);
+    }
+    g_free(buf);
+
+    break;
+  }
   default:
     g_assert_not_reached();
   }
@@ -1043,6 +1074,8 @@ static enum image_format parse_image_format(const char *name, GError **err) {
     return FORMAT_PNG;
   } else if (!strcmp(name, "BMP24")) {
     return FORMAT_BMP;
+  } else if (!strcmp(name, "JPEG2000")) {
+    return FORMAT_JPEG2000;
   } else {
     g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                 "Unrecognized image format: %s", name);
@@ -1443,6 +1476,7 @@ static int get_nonhier_val_offset(GKeyFile *keyfile,
 }
 
 static int get_associated_image_nonhier_offset(GKeyFile *keyfile,
+                                               const char * name,
                                                int nonhier_count,
                                                const char *group,
                                                const char *target_name,
@@ -1470,9 +1504,9 @@ static int get_associated_image_nonhier_offset(GKeyFile *keyfile,
 
   // verify image format
   // we have only ever seen JPEG
-  if (parse_image_format(format, NULL) != FORMAT_JPEG) {
-    g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                "Unsupported associated image format: %s", format);
+  enum image_format format_id = parse_image_format(format, NULL);
+  if (format_id != FORMAT_JPEG) {
+    g_warning("Unsupported associated image '%s' format: %s", name, format);
     g_free(format);
     return -1;
   }
@@ -1726,6 +1760,7 @@ static bool mirax_open(openslide_t *osr, const char *filename,
 
   // associated images
   macro_nonhier_offset = get_associated_image_nonhier_offset(slidedat,
+                                                             "macro",
                                                              nonhier_count,
                                                              GROUP_HIERARCHICAL,
                                                              VALUE_SCAN_DATA_LAYER,
@@ -1734,6 +1769,7 @@ static bool mirax_open(openslide_t *osr, const char *filename,
                                                              &tmp_err);
   SUCCESSFUL_OR_FAIL(tmp_err);
   label_nonhier_offset = get_associated_image_nonhier_offset(slidedat,
+                                                             "label",
                                                              nonhier_count,
                                                              GROUP_HIERARCHICAL,
                                                              VALUE_SCAN_DATA_LAYER,
@@ -1742,6 +1778,7 @@ static bool mirax_open(openslide_t *osr, const char *filename,
                                                              &tmp_err);
   SUCCESSFUL_OR_FAIL(tmp_err);
   thumbnail_nonhier_offset = get_associated_image_nonhier_offset(slidedat,
+                                                                 "thumbnail",
                                                                  nonhier_count,
                                                                  GROUP_HIERARCHICAL,
                                                                  VALUE_SCAN_DATA_LAYER,
