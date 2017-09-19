@@ -37,6 +37,7 @@ requires Valgrind, plus debug symbols for library dependencies (particularly
 glib2) and Fontconfig.  Profile mode requires Valgrind.  Coverage mode
 requires gcov and Doxygen.
 
+**Required Debian packages:** libcairo2-dev, libsqlite3-dev, libtiff5-dev, libxml2-dev, libopenjpeg-dev, libgdk-pixbuf2.0-dev
 
 Features
 ========
